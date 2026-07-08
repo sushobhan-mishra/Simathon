@@ -17,7 +17,8 @@ CONTROLS
 """
 
 import taichi as ti
-import math, time
+import math
+import time
 
 # --- Taichi initialisation ---
 try:
@@ -29,20 +30,20 @@ except Exception:
 print(__doc__)
 
 # --- Simulation constants ---
-WIDTH,  HEIGHT   = 1280, 800
-SCALE            = 300.0         # world-units to pixels
-CX, CY           = WIDTH//2, HEIGHT//2
+WIDTH,  HEIGHT = 1280, 800
+SCALE = 300.0         # world-units to pixels
+CX, CY = WIDTH//2, HEIGHT//2
 
-G                = 1.0           # gravitational constant (normalised)
-BODY_MASS        = 1.0           # mass of each massive body
-SOFTENING_SQ     = (0.02)**2     # epsilon^2 - prevents 1/r singularity
+G = 1.0           # gravitational constant (normalised)
+BODY_MASS = 1.0           # mass of each massive body
+SOFTENING_SQ = (0.02)**2     # epsilon^2 - prevents 1/r singularity
 
-N_TEST           = 12000         # number of massless test particles
-TRAIL_LEN        = 320           # ring-buffer length for body trails
+N_TEST = 12000         # number of massless test particles
+TRAIL_LEN = 320           # ring-buffer length for body trails
 
-DT_BASE          = 2e-3          # base time-step per frame
-SUBSTEPS         = 6             # leapfrog sub-steps per rendered frame
-TIME_SCALE_INIT  = 1.0           # initial time multiplier
+DT_BASE = 2e-3          # base time-step per frame
+SUBSTEPS = 6             # leapfrog sub-steps per rendered frame
+TIME_SCALE_INIT = 1.0           # initial time multiplier
 
 BODY_COLORS = [
     [1.00, 0.45, 0.10],   # body 0: warm amber
@@ -54,58 +55,59 @@ BODY_COLORS = [
 PRESETS = {
     # Figure-8 choreography (Chenciner & Montgomery 2000) - perfectly periodic
     "figure8": [
-        [ 0.9700436, -0.2430872,  0.46620368,  0.43236573],
+        [0.9700436, -0.2430872,  0.46620368,  0.43236573],
         [-0.9700436,  0.2430872,  0.46620368,  0.43236573],
-        [ 0.0,        0.0,       -0.93240737, -0.86473146],
+        [0.0,        0.0,       -0.93240737, -0.86473146],
     ],
     # Lagrange equilateral triangle - stable in equal-mass case
     "lagrange": [
-        [ 1.0,  0.0,       0.0,  0.5773503],
+        [1.0,  0.0,       0.0,  0.5773503],
         [-0.5,  0.8660254, 0.5, -0.2886751],
-        [-0.5, -0.8660254,-0.5, -0.2886751],
+        [-0.5, -0.8660254, -0.5, -0.2886751],
     ],
     # Broucke-Henon: two bodies oscillate, third traces outer oval
     "broucke": [
         [-0.9892620043,  0.0,  0.0,  1.9169244185],
-        [ 2.2096177241,  0.0,  0.0,  0.1910268739],
+        [2.2096177241,  0.0,  0.0,  0.1910268739],
         [-1.2203557197,  0.0,  0.0, -2.1079512924],
     ],
     # Chaotic - sensitive dependence on initial conditions
     "chaos": [
-        [ 0.97,  0.24,  0.93,  0.86],
+        [0.97,  0.24,  0.93,  0.86],
         [-0.97, -0.24,  0.93,  0.86],
-        [ 0.0,   0.0,  -1.86, -1.72],
+        [0.0,   0.0,  -1.86, -1.72],
     ],
     # Yin-Yang I (Sun & Liao 2013) - discovered via deep continuation
     "yinyang": [
-        [ 0.513938,  0.304736, -0.974090,  0.783260],
+        [0.513938,  0.304736, -0.974090,  0.783260],
         [-0.513938, -0.304736, -0.974090,  0.783260],
-        [ 0.0,       0.0,      1.948180, -1.566520],
+        [0.0,       0.0,      1.948180, -1.566520],
     ],
 }
 PRESET_NAMES = list(PRESETS.keys())
 
 # --- Taichi fields ---
-bpos  = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body positions
-bvel  = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body velocities
-bacc  = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body accelerations
+bpos = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body positions
+bvel = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body velocities
+bacc = ti.Vector.field(2, dtype=ti.f32, shape=3)   # body accelerations
 bmass = ti.field(dtype=ti.f32, shape=3)              # body masses
 
-tpos   = ti.Vector.field(2, dtype=ti.f32, shape=N_TEST)  # particle positions
-tvel   = ti.Vector.field(2, dtype=ti.f32, shape=N_TEST)  # particle velocities
-tcol   = ti.Vector.field(3, dtype=ti.f32, shape=N_TEST)  # particle RGB colours
+tpos = ti.Vector.field(2, dtype=ti.f32, shape=N_TEST)  # particle positions
+tvel = ti.Vector.field(2, dtype=ti.f32, shape=N_TEST)  # particle velocities
+tcol = ti.Vector.field(3, dtype=ti.f32, shape=N_TEST)  # particle RGB colours
 talive = ti.field(dtype=ti.i32, shape=N_TEST)             # particle alive flag
 
-trail_pos  = ti.Vector.field(2, dtype=ti.f32, shape=(3, TRAIL_LEN))
+trail_pos = ti.Vector.field(2, dtype=ti.f32, shape=(3, TRAIL_LEN))
 trail_head = ti.field(dtype=ti.i32, shape=3)   # ring-buffer write head
 
 pixels = ti.Vector.field(4, dtype=ti.f32, shape=(WIDTH, HEIGHT))  # HDR RGBA
 
-bcolor = ti.Vector.field(3, dtype=ti.f32, shape=3)   # body RGB colours (Taichi field for kernel access)
+# body RGB colours (Taichi field for kernel access)
+bcolor = ti.Vector.field(3, dtype=ti.f32, shape=3)
 
 mouse_world = ti.Vector.field(2, dtype=ti.f32, shape=())
-mouse_pull  = ti.field(dtype=ti.f32, shape=())   # 1 = pull active
-paused      = ti.field(dtype=ti.i32, shape=())
+mouse_pull = ti.field(dtype=ti.f32, shape=())   # 1 = pull active
+paused = ti.field(dtype=ti.i32, shape=())
 
 # Initialise body colour field from Python list
 for _bi in range(3):
@@ -113,10 +115,11 @@ for _bi in range(3):
 
 # --- Physics kernels ---
 
+
 @ti.func
 def grav_acc_fn(p, q, m):
     # Softened Newtonian gravity: a = G*m*(q-p) / (|q-p|^2 + eps^2)^(3/2)
-    r  = q - p
+    r = q - p
     d2 = r.dot(r) + SOFTENING_SQ
     d3 = ti.sqrt(d2) * d2        # |r|^3 with softening
     return G * m / d3 * r
@@ -149,7 +152,7 @@ def integrate_particles(dt: float):
     for i in range(N_TEST):
         if talive[i] == 0:
             continue
-        p   = tpos[i]
+        p = tpos[i]
         acc = ti.Vector([0.0, 0.0])
         for j in range(3):
             acc += grav_acc_fn(p, bpos[j], bmass[j])
@@ -168,18 +171,18 @@ def respawn_particles(seed: int):
     # Respawn dead particles near a random body with quasi-circular velocity
     for i in range(N_TEST):
         if talive[i] == 0:
-            bi  = (i * 7 + seed) % 3
-            r   = 0.08 + ti.random(ti.f32) * 0.25
+            bi = (i * 7 + seed) % 3
+            r = 0.08 + ti.random(ti.f32) * 0.25
             ang = ti.random(ti.f32) * 6.2831853
             tpos[i] = bpos[bi] + ti.Vector([r * ti.cos(ang), r * ti.sin(ang)])
-            speed   = ti.sqrt(G * bmass[bi] / (r + 0.02))
-            tang    = ti.Vector([-ti.sin(ang), ti.cos(ang)])
+            speed = ti.sqrt(G * bmass[bi] / (r + 0.02))
+            tang = ti.Vector([-ti.sin(ang), ti.cos(ang)])
             tvel[i] = bvel[bi] + tang * speed * (0.7 + ti.random(ti.f32) * 0.6)
             # Colour = gravity-weighted mix of 3 body colours
             c0 = bcolor[0]
             c1 = bcolor[1]
             c2 = bcolor[2]
-            w  = ti.Vector([0.0, 0.0, 0.0])
+            w = ti.Vector([0.0, 0.0, 0.0])
             for j in range(3):
                 d2 = (tpos[i] - bpos[j]).norm_sqr() + SOFTENING_SQ
                 w[j] = 1.0 / d2
@@ -194,15 +197,15 @@ def spawn_burst(wx: float, wy: float, seed: int):
     for i in range(N_TEST):
         if talive[i] == 1:
             continue
-        r   = 0.02 + ti.random(ti.f32) * 0.12
+        r = 0.02 + ti.random(ti.f32) * 0.12
         ang = ti.random(ti.f32) * 6.2831853
-        tpos[i]  = ti.Vector([wx + r * ti.cos(ang), wy + r * ti.sin(ang)])
-        speed    = 0.3 + ti.random(ti.f32) * 0.4
-        tang     = ti.Vector([-ti.sin(ang), ti.cos(ang)])
-        tvel[i]  = tang * speed
-        tcol[i]  = ti.Vector([0.9 + ti.random(ti.f32)*0.1,
-                               0.8 + ti.random(ti.f32)*0.1,
-                               0.7 + ti.random(ti.f32)*0.1])
+        tpos[i] = ti.Vector([wx + r * ti.cos(ang), wy + r * ti.sin(ang)])
+        speed = 0.3 + ti.random(ti.f32) * 0.4
+        tang = ti.Vector([-ti.sin(ang), ti.cos(ang)])
+        tvel[i] = tang * speed
+        tcol[i] = ti.Vector([0.9 + ti.random(ti.f32)*0.1,
+                             0.8 + ti.random(ti.f32)*0.1,
+                             0.7 + ti.random(ti.f32)*0.1])
         talive[i] = 1
 
 
@@ -220,7 +223,8 @@ def clear_pixels():
     # Fade pixel buffer slightly (ghost-trail effect) instead of full clear
     for px, py in pixels:
         old = pixels[px, py]
-        pixels[px, py] = ti.Vector([old[0]*0.10, old[1]*0.10, old[2]*0.10, 1.0])
+        pixels[px, py] = ti.Vector(
+            [old[0]*0.10, old[1]*0.10, old[2]*0.10, 1.0])
 
 
 @ti.func
@@ -239,7 +243,7 @@ def draw_glow(sx: int, sy: int, col: ti.types.vector(3, ti.f32), radius: float, 
             px = sx + dx
             py = sy + dy
             if 0 <= px < WIDTH and 0 <= py < HEIGHT:
-                d2    = float(dx*dx + dy*dy)
+                d2 = float(dx*dx + dy*dy)
                 atten = brightness * ti.exp(-d2 / (radius*radius + 1e-4))
                 existing = pixels[px, py]
                 pixels[px, py] = ti.Vector([
@@ -254,12 +258,12 @@ def draw_glow(sx: int, sy: int, col: ti.types.vector(3, ti.f32), radius: float, 
 def render_trails():
     # Called only when trails are enabled (guarded from Python side)
     for bi in range(3):
-        h   = trail_head[bi]
+        h = trail_head[bi]
         col = bcolor[bi]
         for k in range(TRAIL_LEN):
             age = float(k) / TRAIL_LEN      # 0=oldest, 1=newest
             idx = (h + k) % TRAIL_LEN
-            w   = trail_pos[bi, idx]
+            w = trail_pos[bi, idx]
             sx, sy = world_to_screen_f(w)
             if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
                 alpha = age * age * age      # cubic fade: trails dim near tail
@@ -271,11 +275,11 @@ def render_particles():
     for i in range(N_TEST):
         if talive[i] == 0:
             continue
-        p  = tpos[i]
+        p = tpos[i]
         sx, sy = world_to_screen_f(p)
         if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
-            col    = tcol[i]
-            speed  = tvel[i].norm()
+            col = tcol[i]
+            speed = tvel[i].norm()
             bright = 0.3 + ti.min(speed * 0.6, 1.4)   # faster = brighter
             draw_glow(sx, sy, col, 1.8, bright)
 
@@ -283,7 +287,7 @@ def render_particles():
 @ti.kernel
 def render_bodies():
     for i in range(3):
-        p  = bpos[i]
+        p = bpos[i]
         sx, sy = world_to_screen_f(p)
         col = bcolor[i]
         draw_glow(sx, sy, col, 18.0, 1.0)   # outer halo
@@ -297,10 +301,10 @@ def render_ring(bx: float, by: float, bi: int, hill_r: float):
     col = bcolor[bi]
     for k in range(256):
         ang = float(k) / 256.0 * 6.2831853
-        wx  = bx + hill_r * ti.cos(ang)
-        wy  = by + hill_r * ti.sin(ang)
-        sx  = int(wx * SCALE + CX)
-        sy  = int(wy * SCALE + CY)
+        wx = bx + hill_r * ti.cos(ang)
+        wy = by + hill_r * ti.sin(ang)
+        sx = int(wx * SCALE + CX)
+        sy = int(wy * SCALE + CY)
         if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
             if (k // 8) % 2 == 0:
                 draw_glow(sx, sy, col, 1.5, 0.5)
@@ -315,10 +319,10 @@ def render_field_lines():
         gy = gi // GRID
         wx = (float(gx) / GRID - 0.5) * 8.0
         wy = (float(gy) / GRID - 0.5) * 5.0
-        p  = ti.Vector([wx, wy])
+        p = ti.Vector([wx, wy])
         phi = 0.0
         for bi in range(3):
-            d  = (p - bpos[bi]).norm() + 0.02
+            d = (p - bpos[bi]).norm() + 0.02
             phi -= G * bmass[bi] / d   # Phi = -G*m/r (Newtonian potential)
         bright = ti.min(-phi * 0.04, 0.25)
         sx = int(wx * SCALE + CX)
@@ -338,10 +342,11 @@ def tonemap():
         b = c[2] / (1.0 + c[2])
         # Subtle saturation boost
         lum = 0.2126*r + 0.7152*g + 0.0722*b
-        r   = lum + (r - lum) * 1.3
-        g   = lum + (g - lum) * 1.3
-        b   = lum + (b - lum) * 1.3
-        pixels[px, py] = ti.Vector([ti.max(r,0.0), ti.max(g,0.0), ti.max(b,0.0), 1.0])
+        r = lum + (r - lum) * 1.3
+        g = lum + (g - lum) * 1.3
+        b = lum + (b - lum) * 1.3
+        pixels[px, py] = ti.Vector(
+            [ti.max(r, 0.0), ti.max(g, 0.0), ti.max(b, 0.0), 1.0])
 
 
 # --- Python-side helpers ---
@@ -349,8 +354,8 @@ def tonemap():
 def init_preset(name):
     cfg = PRESETS[name]
     for i in range(3):
-        bpos[i]  = cfg[i][:2]
-        bvel[i]  = cfg[i][2:]
+        bpos[i] = cfg[i][:2]
+        bvel[i] = cfg[i][2:]
         bmass[i] = BODY_MASS
     # Bootstrap leapfrog accelerations
     for i in range(3):
@@ -380,7 +385,7 @@ def compute_hill_radius(bi):
         if j == bi:
             continue
         p1 = bpos[j].to_numpy()
-        d  = math.hypot(p0[0]-p1[0], p0[1]-p1[1])
+        d = math.hypot(p0[0]-p1[0], p0[1]-p1[1])
         dmin = min(dmin, d)
     # Hill sphere: R_H = a * (m / 3M)^(1/3), simplified for equal masses
     return dmin * (1.0/3.0)**(1.0/3.0)
@@ -389,7 +394,7 @@ def compute_hill_radius(bi):
 # --- Main loop ---
 
 def main():
-    preset_idx  = 0
+    preset_idx = 0
     preset_name = PRESET_NAMES[preset_idx]
     init_preset(preset_name)
     respawn_particles(42)
@@ -397,15 +402,15 @@ def main():
     window = ti.ui.Window("Three-Body Problem", (WIDTH, HEIGHT),
                           fps_limit=120)
     canvas = window.get_canvas()
-    gui    = window.get_gui()
+    gui = window.get_gui()
 
-    time_scale   = TIME_SCALE_INIT
-    show_trails  = True
-    highlight    = -1
-    frame        = 0
+    time_scale = TIME_SCALE_INIT
+    show_trails = True
+    highlight = -1
+    frame = 0
     respawn_seed = 0
-    t_sim        = 0.0
-    fps_smooth   = 60.0
+    t_sim = 0.0
+    fps_smooth = 60.0
 
     prev_space = prev_r = prev_t = prev_f = False
     prev_1 = prev_2 = prev_3 = False
@@ -416,15 +421,15 @@ def main():
 
         # -- Input --
         cur_space = window.is_pressed(ti.ui.SPACE)
-        cur_r     = window.is_pressed('r')
-        cur_t     = window.is_pressed('t')
-        cur_f     = window.is_pressed('f')
-        cur_plus  = window.is_pressed('=')
+        cur_r = window.is_pressed('r')
+        cur_t = window.is_pressed('t')
+        cur_f = window.is_pressed('f')
+        cur_plus = window.is_pressed('=')
         cur_minus = window.is_pressed('-')
-        cur_1     = window.is_pressed('1')
-        cur_2     = window.is_pressed('2')
-        cur_3     = window.is_pressed('3')
-        cur_esc   = window.is_pressed(ti.ui.ESCAPE)
+        cur_1 = window.is_pressed('1')
+        cur_2 = window.is_pressed('2')
+        cur_3 = window.is_pressed('3')
+        cur_esc = window.is_pressed(ti.ui.ESCAPE)
 
         if cur_esc:
             break
@@ -442,7 +447,7 @@ def main():
             show_trails = not show_trails
             print("Trails:", "ON" if show_trails else "OFF")
         if cur_f and not prev_f:
-            preset_idx  = (preset_idx + 1) % len(PRESET_NAMES)
+            preset_idx = (preset_idx + 1) % len(PRESET_NAMES)
             preset_name = PRESET_NAMES[preset_idx]
             init_preset(preset_name)
             respawn_particles(respawn_seed)
@@ -469,8 +474,8 @@ def main():
         prev_3 = cur_3
 
         mx, my = window.get_cursor_pos()
-        wx_m   = (mx * WIDTH  - CX) / SCALE
-        wy_m   = (my * HEIGHT - CY) / SCALE
+        wx_m = (mx * WIDTH - CX) / SCALE
+        wy_m = (my * HEIGHT - CY) / SCALE
         mouse_world[None] = [wx_m, wy_m]
 
         lmb = window.is_pressed(ti.ui.LMB)
@@ -515,7 +520,8 @@ def main():
         fps_smooth = fps_smooth * 0.95 + (1.0 / max(dt_frame, 1e-5)) * 0.05
         with gui.sub_window("Info", 0.01, 0.01, 0.26, 0.20):
             gui.text("Preset: " + preset_name)
-            gui.text("Time x" + str(round(time_scale, 2)) + "  T=" + str(round(t_sim, 2)))
+            gui.text("Time x" + str(round(time_scale, 2)) +
+                     "  T=" + str(round(t_sim, 2)))
             gui.text("FPS: " + str(int(fps_smooth)))
             gui.text("Particles: " + str(N_TEST))
             gui.text("PAUSED" if paused[None] else "RUNNING")
